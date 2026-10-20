@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2016  # $ARG/${ARG} stehen absichtlich wörtlich im generierten Wrapper
 # Legt einen eng begrenzten, nur lesenden Diagnose-Zugang für Hermes an.
 #
 # Aufruf (als root):
