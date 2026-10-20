@@ -7,6 +7,12 @@
 #   bash hermes-diag.sh                  # erneut ausführen = aktualisieren
 #   bash hermes-diag.sh --uninstall
 #
+# Auf pve fragt das Skript, ob es auch in alle laufenden LXC und VMs
+# ausgerollt werden soll (LXC über pct exec, VMs über den QEMU-Guest-Agent).
+# Ohne Rückfrage: guests=all bzw. guests=none.
+#
+# Der SSH-Server wird geprüft und bei Bedarf installiert/gestartet.
+#
 # Updates: Die erlaubten Befehle stehen nur in der Tabelle ALLOWED weiter unten.
 # Neue Befehle dort eintragen und das Skript auf dem Host erneut ausführen –
 # Wrapper, sudo-Regel und SSH-Key werden komplett neu geschrieben, entfernte
@@ -22,7 +28,7 @@
 #   root-eigenen Wrapper, der die Prüfung als root wiederholt.
 set -Eeuo pipefail
 
-readonly VERSION="2"
+readonly VERSION="3"
 readonly DIAG_USER="${DIAG_USER:-hermes}"
 readonly MARKER="Hermes read-only diagnostics"
 readonly HERMES_FROM="${HERMES_FROM:-172.22.20.25}"
@@ -107,12 +113,13 @@ fi
 
 [[ ${EUID} -eq 0 ]] || die "als root ausführen (z. B. mit sudo)"
 
-host_type=""; uninstall=0
+host_type=""; uninstall=0; guests=""
 for a in "$@"; do
     case "$a" in
         hostType=*|--host-type=*) host_type="${a#*=}" ;;
+        guests=all|guests=none) guests="${a#*=}" ;;
         --uninstall) uninstall=1 ;;
-        *) die "unbekannter Parameter: $a (erlaubt: hostType=pve|vm, --uninstall)" ;;
+        *) die "unbekannter Parameter: $a (erlaubt: hostType=pve|vm, guests=all|none, --uninstall)" ;;
     esac
 done
 
@@ -143,10 +150,28 @@ fi
 pkgs=()
 command -v sudo >/dev/null 2>&1 || pkgs+=(sudo)
 if [[ "${host_type}" == "pve" ]] && ! command -v smartctl >/dev/null 2>&1; then pkgs+=(smartmontools); fi
+[[ -x /usr/sbin/sshd ]] || pkgs+=(openssh-server)
 if ((${#pkgs[@]})); then
     command -v apt-get >/dev/null 2>&1 || die "fehlende Pakete (${pkgs[*]}) und kein apt-get"
     export DEBIAN_FRONTEND=noninteractive
     apt-get update -qq && apt-get install -y -qq "${pkgs[@]}"
+fi
+
+# 0) SSH-Server muss laufen
+command -v systemctl >/dev/null 2>&1 || die "kein systemd – SSH-Dienst bitte von Hand prüfen"
+ssh_svc=""
+for s in ssh sshd; do systemctl cat "${s}.service" >/dev/null 2>&1 && { ssh_svc="$s"; break; }; done
+[[ -n "${ssh_svc}" ]] || die "kein ssh.service/sshd.service gefunden"
+if ! systemctl is-active --quiet "${ssh_svc}.service" && ! systemctl is-active --quiet ssh.socket 2>/dev/null; then
+    systemctl enable --now "${ssh_svc}.service"
+fi
+systemctl is-active --quiet "${ssh_svc}.service" || systemctl is-active --quiet ssh.socket 2>/dev/null \
+    || die "SSH-Dienst läuft nicht"
+if sshd_cfg="$(/usr/sbin/sshd -T 2>/dev/null)"; then
+    if grep -qiE '^(allowusers|allowgroups) ' <<<"${sshd_cfg}" && ! grep -qiE "^allowusers .*\b${DIAG_USER}\b" <<<"${sshd_cfg}"; then
+        printf 'Warnung: sshd hat AllowUsers/AllowGroups gesetzt – %s darf sich evtl. nicht anmelden.\n' "${DIAG_USER}" >&2
+    fi
+    grep -qi '^pubkeyauthentication no' <<<"${sshd_cfg}" && printf 'Warnung: PubkeyAuthentication ist deaktiviert.\n' >&2
 fi
 
 # 1) User: anlegen oder nur den eigenen weiterverwenden
@@ -185,7 +210,51 @@ printf 'HOST_TYPE=%s\nVERSION=%s\n' "${host_type}" "${VERSION}" >"${CONF}"; chmo
 # 5) Selbsttest als User
 run_as() { sudo -n -u "${DIAG_USER}" env SSH_ORIGINAL_COMMAND="$1" "${WRAPPER}"; }
 run_as "uptime" >/dev/null || die "Selbsttest uptime fehlgeschlagen"
-run_as "dmesg" >/dev/null || die "Selbsttest dmesg (sudo) fehlgeschlagen"
+run_as "journal-kernel 1h" >/dev/null || die "Selbsttest journal-kernel (sudo) fehlgeschlagen"
 if run_as "id; rm -rf /" >/dev/null 2>&1; then die "Selbsttest: unerlaubter Befehl wurde akzeptiert"; fi
 printf 'User %s auf %s eingerichtet (hostType=%s, Zugriff nur von %s).\n' "${DIAG_USER}" "$(hostname)" "${host_type}" "${HERMES_FROM}"
 run_as "help"
+
+# 6) Nur pve: optional in alle laufenden Gäste ausrollen (dort hostType=vm)
+[[ "${host_type}" == "pve" ]] || exit 0
+command -v pct >/dev/null 2>&1 || exit 0
+if [[ -z "${guests}" ]]; then
+    if [[ -r /dev/tty ]]; then
+        read -r -p "Auch in allen laufenden LXC und VMs einrichten? [j/N] " ans </dev/tty || ans=""
+        [[ "${ans}" =~ ^[jJyY]$ ]] && guests="all" || guests="none"
+    else
+        guests="none"
+    fi
+fi
+[[ "${guests}" == "all" ]] || exit 0
+self="$(readlink -f "$0")"
+[[ -f "${self}" ]] || die "Ausrollen geht nur, wenn das Skript als Datei ausgeführt wird (nicht per Pipe)"
+
+ok=(); fail=()
+while read -r id; do
+    [[ -n "${id}" ]] || continue
+    if ! pct exec "${id}" -- sh -c 'command -v bash >/dev/null && command -v apt-get >/dev/null' </dev/null; then
+        fail+=("CT ${id}: kein bash/apt (übersprungen)"); continue
+    fi
+    printf '\n== CT %s ==\n' "${id}"
+    if pct push "${id}" "${self}" /root/hermes-diag.sh --perms 0700 \
+        && pct exec "${id}" -- bash /root/hermes-diag.sh hostType=vm guests=none </dev/null; then
+        ok+=("CT ${id}")
+    else
+        fail+=("CT ${id}: Fehler")
+    fi
+done < <(pct list | awk 'NR>1 && $2=="running" {print $1}')
+
+while read -r id; do
+    [[ -n "${id}" ]] || continue
+    if ! qm guest cmd "${id}" ping </dev/null >/dev/null 2>&1; then fail+=("VM ${id}: kein Guest-Agent (übersprungen)"); continue; fi
+    printf '\n== VM %s ==\n' "${id}"
+    out="$(qm guest exec "${id}" --pass-stdin 1 --timeout 600 -- bash -c \
+        'cat >/root/hermes-diag.sh && chmod 0700 /root/hermes-diag.sh && bash /root/hermes-diag.sh hostType=vm guests=none </dev/null' \
+        <"${self}" 2>&1 || true)"
+    if grep -qE '"exitcode" *: *0' <<<"${out}"; then ok+=("VM ${id}"); else fail+=("VM ${id}: Fehler (kein Debian/apt?)"); fi
+done < <(qm list | awk 'NR>1 && $3=="running" {print $1}')
+
+printf '\nAusgerollt: %s\n' "${ok[*]:-keine}"
+((${#fail[@]})) && printf 'Nicht eingerichtet:\n  %s\n' "${fail[@]}"
+exit 0
