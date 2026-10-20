@@ -49,7 +49,7 @@ sudo bash alloy.sh
 | Skript | Zweck |
 | --- | --- |
 | [`install/alloy.sh`](install/alloy.sh) | Installiert und konfiguriert Grafana Alloy für systemd-Journald → Loki |
-| [`install/hermes-diag.sh`](install/hermes-diag.sh) | Legt den Nur-Lese-Diagnoseuser `hermes` an (SSH-Key nur von Hermes, feste Befehlsliste: smartctl, zpool, dmesg …) |
+| [`install/hermes-diag.sh`](install/hermes-diag.sh) | Legt den Nur-Lese-Diagnoseuser `hermes` an: `hostType=pve` (inkl. smartctl/zpool) oder `hostType=vm`. Erneut ausführen übernimmt geänderte Befehlsliste. |
 
 ## Eigenschaften
 
