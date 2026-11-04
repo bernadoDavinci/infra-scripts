@@ -42,7 +42,7 @@ readonly CONF="/etc/hermes-diag.conf"
 # ---------------------------------------------------------------------------
 # Erlaubte Befehle:  name | hostType (all|pve) | root (0|1) | Argument | Befehl
 #   Argument: none = keins, dev = Gerätename (nvme0n1, sda …), since = 24h/7d,
-#             unit = systemd-Unit (z. B. cloudflared oder ssh.service), ctid = LXC-ID (100 …)
+#             unit = systemd-Unit (z. B. cloudflared oder ssh.service)
 #   Im Befehl steht $ARG für das geprüfte Argument.
 # ---------------------------------------------------------------------------
 readonly ALLOWED='
@@ -62,7 +62,6 @@ df             | all | 0 | none  | df -hT -x tmpfs -x devtmpfs
 systemctl-status | all | 1 | unit | systemctl status --no-pager --lines=30 -- "$ARG" || true
 systemctl-failed | all | 0 | none | systemctl --failed --no-pager
 cloudflared-version | all | 0 | none | if command -v cloudflared >/dev/null; then cloudflared --version; else echo "cloudflared nicht installiert"; fi
-ct-cloudflared-version | pve | 1 | ctid | pct exec "$ARG" -- cloudflared --version </dev/null 2>&1 || echo "cloudflared im CT nicht gefunden"
 '
 
 die() { printf 'Error: %s\n' "$*" >&2; exit 1; }
@@ -84,7 +83,6 @@ check() {
         dev)   [[ "${2:-}" =~ ^(nvme[0-9]+n[0-9]+|nvme[0-9]+|sd[a-z]{1,2})$ ]] && [[ -e "/dev/$2" ]] ;;
         since) [[ "${2:-}" =~ ^[0-9]{1,3}(h|d)$ ]] ;;
         unit)  [[ "${2:-}" =~ ^[A-Za-z0-9][A-Za-z0-9@_.:-]{0,79}$ ]] ;;
-        ctid)  [[ "${2:-}" =~ ^[1-9][0-9]{2,8}$ ]] ;;
         *)     false ;;
     esac
 }
