@@ -13,6 +13,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Check Bash syntax
-        run: bash -n install/*.sh
+        run: for f in setup.sh install/*.sh; do bash -n "$f"; done
       - name: Run ShellCheck
         uses: ludeeus/action-shellcheck@2.0.0
