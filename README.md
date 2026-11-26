@@ -2,6 +2,47 @@
 
 Versionierte Installations- und Bootstrap-Skripte für Linux-Hosts im Homelab.
 
+## Neue VM einrichten (Menü)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/bernadoDavinci/infra-scripts/main/setup.sh | sudo bash
+```
+
+`setup.sh` zeigt alle Skripte aus `install/` zur Auswahl (whiptail-Checkliste, ohne
+whiptail ein Nummernmenü) und führt die gewählten nacheinander aus. Am Ende steht eine
+Übersicht OK/FEHLER; ein fehlgeschlagenes Skript stoppt die übrigen nicht.
+
+Ohne Menü, z. B. für Automatisierung:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/bernadoDavinci/infra-scripts/main/setup.sh \
+  | sudo bash -s -- auto-updates alloy      # oder: all
+```
+
+Aus einem Klon (`sudo bash setup.sh`) werden die lokalen Skripte verwendet, sonst lädt
+`setup.sh` sie vom selben Ref (`REF=<tag|commit>` zum Festnageln).
+Neues Skript: Datei nach `install/` legen und in der Tabelle `SCRIPTS` in `setup.sh` eintragen.
+
+## Automatische Sicherheitsupdates
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/bernadoDavinci/infra-scripts/main/install/auto-updates.sh | sudo bash
+```
+
+Installiert `unattended-upgrades`, aktiviert tägliche Läufe und – auf Debian – beschränkt
+die Quellen auf `Debian-Security` (Debian aktiviert ab Werk auch Point-Releases; Ubuntu
+ist ab Werk schon nur `-security`). Kein automatischer Neustart, alte Kernel werden entfernt,
+Log zusätzlich ins Journal (→ Alloy/Loki). Auf Proxmox-Nodes werden nur Debian-Pakete
+aktualisiert, PVE-Pakete bleiben manuell.
+
+| Parameter | Wirkung |
+| --- | --- |
+| `reboot=03:30` | Neustart zur angegebenen Uhrzeit, falls ein Update ihn verlangt |
+| `scope=stable` | Debian: Distro-Standard (Security + Point-Releases) |
+| `--disable` | Automatische Updates wieder abschalten |
+
+Parameter beim Pipe-Aufruf mit `| sudo bash -s -- reboot=03:30` übergeben.
+
 ## Alloy installieren
 
 Unterstützt werden aktuell Debian- und Ubuntu-Systeme mit `apt` und `systemd`.
@@ -48,6 +89,8 @@ sudo bash alloy.sh
 
 | Skript | Zweck |
 | --- | --- |
+| [`setup.sh`](setup.sh) | Auswahlmenü: führt die gewählten Skripte aus `install/` aus |
+| [`install/auto-updates.sh`](install/auto-updates.sh) | Automatische Sicherheitsupdates per unattended-upgrades |
 | [`install/alloy.sh`](install/alloy.sh) | Installiert und konfiguriert Grafana Alloy für systemd-Journald → Loki |
 | [`install/hermes-diag.sh`](install/hermes-diag.sh) | Legt den Nur-Lese-Diagnoseuser `hermes` an: `hostType=pve` (inkl. smartctl/zpool) oder `hostType=vm`. Erneut ausführen übernimmt geänderte Befehlsliste. Ab v4 auch `systemctl-status <unit>`, `systemctl-failed` und `cloudflared-version`. |
 
